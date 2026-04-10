@@ -81,7 +81,7 @@ def test_get_ready_tasks_all_runs(engine):
 
 def test_claim_expired_allows_reclaim(engine):
     """A task with an expired claim can be re-claimed."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timezone, timedelta
     from sqlalchemy.orm import Session
     from dag_planner_mcp.db import WorkflowTask
 
@@ -92,7 +92,7 @@ def test_claim_expired_allows_reclaim(engine):
     with Session(engine) as session:
         task = session.get(WorkflowTask, t1_id)
         task.claimed_by = "old_exec"
-        task.claimed_until = (datetime.utcnow() - timedelta(seconds=10)).isoformat()
+        task.claimed_until = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
         session.commit()
 
     result = claim_task_for_execution(task_id=t1_id, executor_id="new_exec", _engine=engine)

@@ -1,7 +1,7 @@
 """Sub-agent tools: narrow task interface for executing agents."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ def _short_id():
 
 
 def _now():
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def get_my_task(task_id: str, executor_id: Optional[str] = None, _engine=None) -> dict:

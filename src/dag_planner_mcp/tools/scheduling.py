@@ -1,7 +1,7 @@
 """Scheduling tools: get ready tasks and claim them for execution."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import and_, or_
@@ -23,7 +23,7 @@ def _short_id():
 
 
 def _now():
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _emit_event(session, run_id, task_id, event_type, payload=None, created_by="system"):
@@ -96,7 +96,7 @@ def claim_task_for_execution(
 ) -> dict:
     """Claim a ready task for execution. Returns error if already claimed or not ready."""
     engine = _engine or get_engine()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     now_str = now.isoformat()
     claim_until = (now + timedelta(seconds=claim_duration_seconds)).isoformat()
 

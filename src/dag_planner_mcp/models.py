@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ResponseEnvelope(BaseModel):
@@ -15,7 +15,7 @@ def ok_response(data, **meta_kwargs):
     return ResponseEnvelope(
         ok=True,
         data=data,
-        meta={"timestamp": datetime.utcnow().isoformat(), **meta_kwargs},
+        meta={"timestamp": datetime.now(timezone.utc).isoformat(), **meta_kwargs},
     ).model_dump()
 
 
@@ -24,5 +24,5 @@ def err_response(code, message, **meta_kwargs):
         ok=False,
         error=message,
         error_code=code,
-        meta={"timestamp": datetime.utcnow().isoformat(), **meta_kwargs},
+        meta={"timestamp": datetime.now(timezone.utc).isoformat(), **meta_kwargs},
     ).model_dump()

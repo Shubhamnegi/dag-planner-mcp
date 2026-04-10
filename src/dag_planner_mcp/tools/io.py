@@ -1,7 +1,7 @@
 """IO tools: store task outputs, checkpoints, and retrieve payload refs."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ def _short_id():
 
 
 def _now():
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _emit_event(session, run_id, task_id, event_type, payload=None, created_by="system"):
