@@ -1,170 +1,210 @@
 # Examples
 
-## 1. Minimal Two-Task Pipeline
-
-```python
-import json, asyncio
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client
-
-async def main():
-    async with stdio_client(["dag-planner-mcp"]) as (r, w):
-        async with ClientSession(r, w) as session:
-            await session.initialize()
-
-            # Create run
-            res = await session.call_tool("create_workflow_run",
-                                          {"goal": "Summarise a document"})
-            run_id = json.loads(res.content[0].text)["data"]["run_id"]
-
-            # Define DAG
-            await session.call_tool("create_plan_graph", {
-                "run_id": run_id,
-                "tasks": [
-                    {
-                        "task_key": "read",
-                        "title": "Read document",
-                        "description": "Load and chunk the document",
-                        "owner_agent": "reader",
-                        "depends_on": [],
-                        "output_contract": {"type": "object", "required": ["chunks"]}
-                    },
-                    {
-                        "task_key": "summarise",
-                        "title": "Summarise chunks",
-                        "description": "Produce a 200-word summary",
-                        "owner_agent": "writer",
-                        "depends_on": ["read"],
-                        "output_contract": {"type": "object", "required": ["summary"]}
-                    }
-                ]
-            })
-
-            # Execute
-            while True:
-                res = await session.call_tool("get_ready_tasks", {"run_id": run_id})
-                tasks = json.loads(res.content[0].text)["data"]["tasks"]
-                if not tasks:
-                    break
-
-                for task in tasks:
-                    tid = task["task_id"]
-                    await session.call_tool("claim_task_for_execution",
-                                            {"task_id": tid, "executor_id": "demo"})
-                    await session.call_tool("mark_task_running", {"task_id": tid})
-
-                    # Simulate work
-                    output = {"chunks": ["chunk1"]} if task["task_key"] == "read" \
-                             else {"summary": "The document is about ..."}
-
-                    await session.call_tool("put_task_output",
-                                            {"task_id": tid, "output": output, "is_final": True})
-                    await session.call_tool("validate_task_output", {"task_id": tid})
-                    await session.call_tool("mark_task_completed",
-                                            {"task_id": tid, "final_output": output})
-
-asyncio.run(main())
-```
+Each example shows the exact tool calls an agent makes, the expected response shape, and what to do next. No Python SDK required — you call these tools directly.
 
 ---
 
-## 2. Parallel Fan-Out
+## 1. Minimal Two-Task Sequential Pipeline
 
-All three leaf tasks run in parallel because they share no dependencies:
+**Goal:** "Summarise a document"
 
-```python
-await session.call_tool("create_plan_graph", {
-    "run_id": run_id,
-    "tasks": [
-        {"task_key": "fetch_ec2",  "title": "Fetch EC2 costs",  "depends_on": [], ...},
-        {"task_key": "fetch_s3",   "title": "Fetch S3 costs",   "depends_on": [], ...},
-        {"task_key": "fetch_rds",  "title": "Fetch RDS costs",  "depends_on": [], ...},
-        {
-            "task_key": "report",
-            "title": "Build cost report",
-            "depends_on": ["fetch_ec2", "fetch_s3", "fetch_rds"],
-            ...
-        }
-    ]
-})
+**Step 1 — Start the run**
+
+Tool: `create_workflow_run`
+Input: `{ "goal": "Summarise a document" }`
+Response: `{ "data": { "run_id": "run_001" } }`
+
+**Step 2 — Submit the plan**
+
+Tool: `create_plan_graph`
+Input:
+```json
+{
+  "run_id": "run_001",
+  "tasks": [
+    {
+      "task_key": "read",
+      "title": "Read document",
+      "description": "Load and chunk the document into sections",
+      "owner_agent": "me",
+      "depends_on": [],
+      "output_contract": { "type": "object", "required": ["chunks"] }
+    },
+    {
+      "task_key": "summarise",
+      "title": "Summarise chunks",
+      "description": "Produce a 200-word summary from the chunks",
+      "owner_agent": "me",
+      "depends_on": ["read"],
+      "output_contract": { "type": "object", "required": ["summary"] }
+    }
+  ]
+}
 ```
 
-Call `get_ready_tasks` in a loop — the first iteration returns all three fetch tasks.
+**Step 3 — First loop iteration: only "read" is ready**
+
+Tool: `get_ready_tasks` → `{ "data": { "tasks": [{ "task_id": "t_read", "task_key": "read" }] } }`
+
+Tool: `claim_task_for_execution` → `{ "task_id": "t_read", "executor_id": "me" }`
+Tool: `mark_task_running` → `{ "task_id": "t_read" }`
+*(Do the work — load and chunk the document)*
+Tool: `put_task_output` → `{ "task_id": "t_read", "output": { "chunks": ["..."] }, "is_final": true }`
+Tool: `validate_task_output` → `{ "task_id": "t_read" }` ✔
+Tool: `mark_task_completed` → `{ "task_id": "t_read", "final_output": { "chunks": ["..."] } }`
+
+**Step 4 — Second loop iteration: "summarise" is now ready**
+
+Repeat claim → run → output → validate → complete for `t_summarise`.
+
+**Step 5 — Third iteration: empty list → workflow complete**
+
+Tool: `get_ready_tasks` → `{ "data": { "tasks": [] } }`
+
+Call `get_workflow_run` to confirm: `{ "data": { "status": "completed" } }`
+
+---
+
+## 2. Parallel Fan-Out (Three Independent Tasks + One Aggregator)
+
+Tasks with no `depends_on` all become ready at the same time. Claim and execute them in any order (or in parallel if your setup supports it).
+
+Tool: `create_plan_graph`
+Input:
+```json
+{
+  "run_id": "run_002",
+  "tasks": [
+    { "task_key": "fetch_ec2", "title": "Fetch EC2 costs", "depends_on": [], "owner_agent": "me",
+      "output_contract": { "type": "object", "required": ["cost_usd"] } },
+    { "task_key": "fetch_s3",  "title": "Fetch S3 costs",  "depends_on": [], "owner_agent": "me",
+      "output_contract": { "type": "object", "required": ["cost_usd"] } },
+    { "task_key": "fetch_rds", "title": "Fetch RDS costs", "depends_on": [], "owner_agent": "me",
+      "output_contract": { "type": "object", "required": ["cost_usd"] } },
+    { "task_key": "report", "title": "Build cost report",
+      "depends_on": ["fetch_ec2", "fetch_s3", "fetch_rds"], "owner_agent": "me",
+      "output_contract": { "type": "object", "required": ["total_usd", "summary"] } }
+  ]
+}
+```
+
+First `get_ready_tasks` call returns all three fetch tasks simultaneously. Execute all three, then call `get_ready_tasks` again — now `report` is ready.
 
 ---
 
 ## 3. Human-in-the-Loop Gate
 
-```python
-# Sub-agent blocks on a decision
-await session.call_tool("request_human_input", {
-    "task_id": task_id,
-    "question": "Delete 47 stale S3 buckets costing $230/month? (yes/no)"
-})
+Use when a task requires explicit user approval before proceeding.
 
-# Human reviews, then the orchestrator resumes
-await session.call_tool("resume_task", {
-    "task_id": task_id,
-    "decision": "yes"
-})
-```
+**Inside the execution loop, instead of doing the work yourself:**
+
+Tool: `request_human_input`
+Input: `{ "task_id": "t_delete", "question": "Delete 47 stale S3 buckets costing $230/month? (yes/no)" }`
+
+The task moves to `blocked_human`. Surface the question to the user and wait.
+
+**When the user responds "yes":**
+
+Tool: `resume_task`
+Input: `{ "task_id": "t_delete", "decision": "approved" }`
+
+The task re-enters the ready queue. Next `get_ready_tasks` call will return it.
+
+**Checking what is blocked:**
+
+Tool: `get_blocked_tasks`
+Input: `{ "run_id": "run_003" }`
+Response: lists all tasks currently in `blocked_human` or blocked by a failed upstream.
 
 ---
 
-## 4. Incremental Progress + Checkpoint
+## 4. Incremental Progress and Checkpoint
 
-Sub-agents that process many items can save checkpoints so a retry picks up where it left off:
+For long-running tasks that process many items, save checkpoints so a retry picks up where it left off.
 
-```python
-for i, item in enumerate(items):
-    result = process(item)
-    await session.call_tool("update_my_progress", {
-        "task_id": task_id,
-        "working_output": {"processed": i + 1, "last_result": result},
-        "checkpoint": {"last_index": i}
-    })
+**While processing items, call periodically:**
+
+Tool: `update_my_progress`
+Input:
+```json
+{
+  "task_id": "t_process",
+  "working_output": { "processed_count": 42, "last_item_id": "item_042" },
+  "checkpoint": { "last_index": 41 }
+}
 ```
 
-On restart, read the checkpoint:
+**If the task restarts, read the last checkpoint:**
 
-```python
-refs = await session.call_tool("get_task_payload_refs", {"task_id": task_id})
-# contains checkpoint data from the last run
-```
+Tool: `get_task_payload_refs`
+Input: `{ "task_id": "t_process" }`
+Response contains `checkpoint` with `{ "last_index": 41 }` — resume from index 42.
 
 ---
 
 ## 5. Validate DAG Before Submitting
 
-Detect cycles before sending the plan:
+Always call this before `create_plan_graph` when the dependency graph is non-trivial.
 
-```python
-await session.call_tool("validate_dag_acyclic", {
-    "tasks": [
-        {"task_key": "a", "depends_on": ["b"]},
-        {"task_key": "b", "depends_on": ["a"]}   # cycle!
-    ]
-})
-# Returns error: "Cycle detected involving task 'a'"
+Tool: `validate_dag_acyclic`
+Input:
+```json
+{
+  "tasks": [
+    { "task_key": "a", "depends_on": ["b"] },
+    { "task_key": "b", "depends_on": ["a"] }
+  ]
+}
 ```
+Response: error — `"Cycle detected involving task 'a'"`
+
+Fix the cycle, then call `create_plan_graph`.
 
 ---
 
-## 6. Dynamic Branch Replacement
+## 6. Dynamic Branch Replacement (Replanning Mid-Run)
 
-Replace a failing branch mid-flight:
+When a task fails and its planned recovery path is no longer valid, swap in a new branch without restarting the whole run.
 
-```python
-await session.call_tool("replace_plan_branch", {
-    "run_id": run_id,
-    "cancel_from_task_key": "analyze",  # cancel this and all descendants
-    "new_tasks": [
-        {
-            "task_key": "fallback_analyze",
-            "title": "Fallback analysis",
-            "depends_on": ["fetch_data"],
-            ...
-        }
-    ]
-})
+Tool: `replace_plan_branch`
+Input:
+```json
+{
+  "run_id": "run_005",
+  "cancel_from_task_key": "analyze",
+  "new_tasks": [
+    {
+      "task_key": "fallback_analyze",
+      "title": "Simplified fallback analysis",
+      "description": "Use cached data instead of fresh pull",
+      "owner_agent": "me",
+      "depends_on": ["fetch_data"],
+      "output_contract": { "type": "object", "required": ["summary"] }
+    }
+  ]
+}
 ```
+
+`analyze` and all its descendants are cancelled. `fallback_analyze` is grafted in their place and becomes ready as soon as `fetch_data` completes.
+
+---
+
+## 7. Querying Run State Mid-Execution
+
+**Get full run status:**
+
+Tool: `get_workflow_run`
+Input: `{ "run_id": "run_001" }`
+Response: `{ "data": { "status": "in_progress", "goal": "...", "completed_tasks": 2, "total_tasks": 4 } }`
+
+**List all tasks with their current status:**
+
+Tool: `list_tasks`
+Input: `{ "run_id": "run_001" }`
+Response: array of tasks each with `status` (`pending`, `ready`, `claimed`, `running`, `completed`, `failed`, `blocked_human`)
+
+**Inspect a specific task:**
+
+Tool: `get_task`
+Input: `{ "task_id": "t_analyze" }`
+Response: full task record including status, owner, output, and dependency list.

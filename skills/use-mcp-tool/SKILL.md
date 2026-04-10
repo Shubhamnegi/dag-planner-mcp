@@ -1,171 +1,235 @@
 ---
 name: use-mcp-tool
-description: Use this skill when you need to break a goal into a dependency graph of tasks, execute them in parallel, track state durably, and handle human-in-the-loop approvals via the dag-planner-mcp MCP server.
+description: Use this skill when you (an AI agent) need to orchestrate a multi-step goal by planning a DAG of tasks, executing them in dependency order, tracking state across turns, and optionally pausing for human approval — all through the dag-planner-mcp MCP tools you have available.
 ---
 
 # dag-planner-mcp Skill
 
-A **durable DAG-based task planner** exposed as an MCP server. Lets AI orchestrators plan a goal as a directed-acyclic graph (DAG) of tasks, execute them in topological order (with parallelism), and track state persistently in SQLite or PostgreSQL.
+You have access to the **dag-planner-mcp** MCP server. It gives you a set of tools to plan any goal as a **Directed Acyclic Graph (DAG)** of tasks, drive execution step-by-step, persist state across conversation turns, and gate progress on human approval when needed.
+
+You call these tools directly — no code, no SDK. The server handles persistence, dependency resolution, and scheduling.
 
 ---
 
 ## When to use
 
-- You need to decompose a multi-step goal into parallel, dependent tasks.
-- You need durable task state (survives restarts, retries, checkpoints).
-- You need human-in-the-loop approval gates inside a task graph.
-- You are building or running an agent orchestration loop that dispatches work to sub-agents.
+- The user's request involves multiple steps that have dependencies (do A before B, do B and C in parallel, then D).
+- You need to track progress across many turns or a long session.
+- Some steps need human approval before proceeding.
+- You are acting as an orchestrator dispatching work to sub-agents or tools, and need to coordinate their outputs.
+- The workflow might fail mid-way and needs retry or replanning capability.
 
 ## When NOT to use
 
-- Single, atomic actions that need no ordering or retry logic.
-- One-off scripts where state persistence adds no value.
-- Real-time streaming pipelines — this is a planner, not a streaming bus.
+- The task is a single, self-contained action with no sequencing needed.
+- No persistence or state tracking is required.
+- You are only reading or querying — not executing a multi-step plan.
 
 ---
 
-## Setup
+## Server Setup (human prerequisite)
 
-> Full setup details: [`references/setup.md`](references/setup.md)
+> The server must already be running and connected to your MCP client before you can call these tools.
+> If the tools are not available in your context, ask the user to set up the server first.
+> Full setup instructions: [`references/setup.md`](references/setup.md)
 
-```bash
-# 1. Clone & install
-git clone https://github.com/Shubhamnegi/dag-planner-mcp.git
-cd dag-planner-mcp
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-# 2. Set the database URL (SQLite default — no extra setup needed)
-export DATABASE_URL="sqlite:///dag_planner.db"
-
-# 3. Start the server (stdio mode — for Claude Desktop / most MCP clients)
-dag-planner-mcp
-```
-
-Environment variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///dag_planner.db` | SQLAlchemy URL (SQLite or PostgreSQL) |
-| `MCP_HOST` | `127.0.0.1` | Bind host for HTTP transport |
-| `MCP_PORT` | `8000` | Bind port for HTTP transport |
+Quick check — if you can call `get_workflow_run` and it responds, the server is connected.
 
 ---
 
-## Workflow
+## Orchestration Workflow
+
+This is the standard loop you follow when executing any multi-step plan.
 
 ### Step 1 — Create a workflow run
 
-```python
-result = await session.call_tool("create_workflow_run", {
-    "goal": "Analyze AWS cost spike and send a report"
-})
-run_id = result["data"]["run_id"]
+Call `create_workflow_run` with the user's goal. Save the `run_id` — you need it for all subsequent calls.
+
+**Tool:** `create_workflow_run`
+```json
+{ "goal": "Analyze AWS cost spike and send a report" }
 ```
+
+**Response:**
+```json
+{ "data": { "run_id": "run_abc123" } }
+```
+
+---
 
 ### Step 2 — Define the task DAG
 
-```python
-await session.call_tool("create_plan_graph", {
-    "run_id": run_id,
-    "tasks": [
-        {
-            "task_key": "fetch_data",
-            "title": "Fetch cost data",
-            "description": "Pull last 3 weeks of AWS cost data",
-            "owner_agent": "data_agent",
-            "depends_on": [],
-            "output_contract": {"type": "object", "required": ["cost_data"]}
-        },
-        {
-            "task_key": "analyze",
-            "title": "Analyze spike",
-            "description": "Identify top services causing the spike",
-            "owner_agent": "analyst_agent",
-            "depends_on": ["fetch_data"],
-            "output_contract": {"type": "object", "required": ["summary"]}
-        }
-    ]
-})
+Call `create_plan_graph` with the full list of tasks and their dependencies. Each task needs:
+- `task_key` — unique short identifier (snake_case)
+- `title` — human-readable name
+- `description` — what the task should do
+- `owner_agent` — which agent/tool handles this (can be `"me"` if you do it yourself)
+- `depends_on` — list of `task_key` values that must complete first (empty = runs immediately)
+- `output_contract` — JSON Schema the task's output must satisfy
+
+**Tool:** `create_plan_graph`
+```json
+{
+  "run_id": "run_abc123",
+  "tasks": [
+    {
+      "task_key": "fetch_data",
+      "title": "Fetch cost data",
+      "description": "Pull last 3 weeks of AWS cost data",
+      "owner_agent": "me",
+      "depends_on": [],
+      "output_contract": { "type": "object", "required": ["cost_data"] }
+    },
+    {
+      "task_key": "analyze",
+      "title": "Analyze spike",
+      "description": "Identify top services causing the spike",
+      "owner_agent": "me",
+      "depends_on": ["fetch_data"],
+      "output_contract": { "type": "object", "required": ["summary"] }
+    }
+  ]
+}
 ```
 
-### Step 3 — Orchestrator execution loop
+> **Tip:** Before calling `create_plan_graph`, call `validate_dag_acyclic` with your task list to catch any circular dependencies early.
 
-```python
-while True:
-    res = await session.call_tool("get_ready_tasks", {"run_id": run_id})
-    tasks = res["data"]["tasks"]
-    if not tasks:
-        break  # All done or blocked
+---
 
-    for task in tasks:
-        task_id = task["task_id"]
-        await session.call_tool("claim_task_for_execution",
-                                {"task_id": task_id, "executor_id": "agent-1"})
-        await session.call_tool("mark_task_running", {"task_id": task_id})
+### Step 3 — Drive the execution loop
 
-        # ... dispatch to sub-agent and collect output ...
-        output = {"summary": "EC2 caused 40% spike"}
+Repeat this loop until all tasks are done:
 
-        await session.call_tool("put_task_output",
-                                {"task_id": task_id, "output": output, "is_final": True})
-        await session.call_tool("validate_task_output", {"task_id": task_id})
-        await session.call_tool("mark_task_completed",
-                                {"task_id": task_id, "final_output": output})
+1. **Get ready tasks** — call `get_ready_tasks` with the `run_id`.
+   - If the response list is empty, check `get_blocked_tasks` to see if anything is waiting on human input or a failed upstream.
+   - If no tasks are ready and none are blocked, the workflow is complete.
+
+2. **For each ready task:**
+   - Call `claim_task_for_execution` (marks it as yours, prevents double-execution).
+   - Call `mark_task_running`.
+   - Do the actual work (call other tools, read files, compute, etc.).
+   - Call `put_task_output` with `is_final: true` when done.
+   - Call `validate_task_output` to confirm the output matches the contract.
+   - Call `mark_task_completed` with the final output.
+
+**Tool sequence per task:**
 ```
-
-### Step 4 — Handle human-in-the-loop gates (optional)
-
-```python
-# Block a task and ask a human
-await session.call_tool("request_human_input", {
-    "task_id": task_id,
-    "question": "Should I proceed with deleting the stale S3 buckets?"
-})
-
-# After human responds, resume
-await session.call_tool("resume_task", {
-    "task_id": task_id,
-    "decision": "approved"
-})
+get_ready_tasks           → pick a task
+claim_task_for_execution  → lock it
+mark_task_running         → signal start
+... do the work ...
+put_task_output           → store result
+validate_task_output      → confirm schema
+mark_task_completed       → unlock dependents
 ```
 
 ---
 
-## Key Tools Reference
+### Step 4 — Handle human-in-the-loop gates (when needed)
 
-| Category | Tool | What it does |
+When a task requires human approval before proceeding:
+
+**Tool:** `request_human_input`
+```json
+{
+  "task_id": "task_xyz",
+  "question": "Should I proceed with deleting the 47 stale S3 buckets costing $230/month?"
+}
+```
+
+The task is now `blocked_human`. Pause and surface the question to the user. When the user responds:
+
+**Tool:** `resume_task`
+```json
+{
+  "task_id": "task_xyz",
+  "decision": "approved"
+}
+```
+
+The task re-enters the ready queue and execution continues.
+
+---
+
+### Step 5 — Handle failures and replanning
+
+If a task fails:
+
+- Call `mark_task_failed` to record the failure (with optional retry flag).
+- To swap out a failed branch without restarting the whole run, call `replace_plan_branch` — cancel from the failed task and graft in new tasks.
+
+**Tool:** `replace_plan_branch`
+```json
+{
+  "run_id": "run_abc123",
+  "cancel_from_task_key": "analyze",
+  "new_tasks": [
+    {
+      "task_key": "fallback_analyze",
+      "title": "Fallback analysis (simplified)",
+      "depends_on": ["fetch_data"],
+      ...
+    }
+  ]
+}
+```
+
+---
+
+## Sub-Agent Pattern
+
+When you dispatch a task to another agent or sub-process, use the **subagent-safe wrappers** instead of the full lifecycle tools. These give a narrower, safer view:
+
+| Tool | Use when |
+|---|---|
+| `get_my_task` | Sub-agent reads its own task details |
+| `update_my_progress` | Sub-agent saves incremental output / checkpoint |
+| `submit_my_output` | Sub-agent completes the task |
+| `request_human_input` | Sub-agent needs a human decision |
+
+---
+
+## Full Tool Reference
+
+| Category | Tool | Purpose |
 |---|---|---|
-| Planning | `create_workflow_run` | Start a new run (returns `run_id`) |
-| Planning | `create_plan_graph` | Define the task DAG |
-| Planning | `replace_plan_branch` | Graft a new branch at any point |
-| Scheduling | `get_ready_tasks` | List tasks ready to execute |
-| Scheduling | `claim_task_for_execution` | Atomically claim a task with a lease |
-| State | `mark_task_running` / `mark_task_completed` / `mark_task_failed` | Lifecycle transitions |
-| State | `mark_task_blocked_human` / `resume_task` | Human-in-the-loop gates |
-| I/O | `put_task_output` / `put_task_checkpoint` | Store outputs and checkpoints |
-| Query | `get_task` / `list_tasks` / `get_workflow_run` | Inspect state |
-| Validation | `validate_task_output` / `validate_dag_acyclic` | Schema & cycle checks |
-| Subagent | `get_my_task` / `update_my_progress` / `submit_my_output` | Safe wrappers for sub-agents |
+| Planning | `create_workflow_run` | Start a new run → get `run_id` |
+| Planning | `create_plan_graph` | Submit the task DAG |
+| Planning | `replace_plan_branch` | Cancel + regraft a branch mid-run |
+| Scheduling | `get_ready_tasks` | List tasks whose dependencies are satisfied |
+| Scheduling | `claim_task_for_execution` | Atomically lock a task with a time-bounded lease |
+| Lifecycle | `mark_task_running` | Signal task is being worked on |
+| Lifecycle | `mark_task_completed` | Mark done; auto-promotes dependent tasks to ready |
+| Lifecycle | `mark_task_failed` | Record failure with optional retry |
+| Lifecycle | `mark_task_blocked_human` | Block awaiting human decision |
+| Lifecycle | `resume_task` | Resume after human decision |
+| I/O | `put_task_output` | Store working or final output |
+| I/O | `put_task_checkpoint` | Save an incremental checkpoint (survives restarts) |
+| I/O | `get_task_payload_refs` | Retrieve all stored output/checkpoints for a task |
+| Query | `get_task` | Full state of a single task |
+| Query | `list_tasks` | List tasks for a run with status filters |
+| Query | `get_workflow_run` | Overall run state and progress |
+| Query | `get_blocked_tasks` | Tasks blocked on human input or failed upstreams |
+| Query | `get_dag_edges` | All dependency edges for a run |
+| Validation | `validate_task_output` | Check output against the task's JSON Schema contract |
+| Validation | `validate_dag_acyclic` | Detect cycles in a task list before submitting |
+| Sub-agent | `get_my_task` | Narrow task view for a sub-agent |
+| Sub-agent | `update_my_progress` | Save incremental progress + checkpoint |
+| Sub-agent | `submit_my_output` | Submit final output and complete the task |
+| Sub-agent | `request_human_input` | Block task and surface a question to the human |
 
-> Full tool list with parameters: [`references/examples.md`](references/examples.md)
-
----
-
-## Examples
-
-> See [`references/examples.md`](references/examples.md) for complete, runnable examples.
-> See [`scripts/example_client.py`](scripts/example_client.py) for a working stdio client.
+> Annotated examples: [`references/examples.md`](references/examples.md)
 
 ---
 
 ## Troubleshooting
 
-> See [`references/troubleshooting.md`](references/troubleshooting.md) for common failure cases.
+> Full troubleshooting guide: [`references/troubleshooting.md`](references/troubleshooting.md)
 
 Quick fixes:
 
-- **`ModuleNotFoundError: dag_planner_mcp`** → Run `pip install -e .` inside the repo root.
-- **`DATABASE_URL` not set** → Export it before starting: `export DATABASE_URL="sqlite:///dag_planner.db"`.
-- **Cycle detected error** → Use `validate_dag_acyclic` before calling `create_plan_graph`.
-- **Task stuck in `claimed`** → The lease expired. Call `claim_task_for_execution` again.
+- **Tools not available** → Server is not connected. Ask the user to follow [`references/setup.md`](references/setup.md).
+- **`get_ready_tasks` returns empty but run is not complete** → Call `get_blocked_tasks` to find what is stuck and why.
+- **Cycle detected on `create_plan_graph`** → Call `validate_dag_acyclic` with your task list first and fix reported cycles.
+- **Task stuck in `claimed`** → The lease expired. Call `claim_task_for_execution` again with the same `task_id`.
+- **`validate_task_output` fails** → The output you stored does not satisfy the `output_contract` schema. Add the missing required fields and call `put_task_output` again before retrying validation.

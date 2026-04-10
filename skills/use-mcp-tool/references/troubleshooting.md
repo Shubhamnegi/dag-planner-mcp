@@ -1,131 +1,117 @@
 # Troubleshooting
 
-## Installation Issues
+## The DAG Planner Tools Are Not Available
 
-### `ModuleNotFoundError: No module named 'dag_planner_mcp'`
+**Symptom:** You try to call `create_workflow_run` (or any other tool) and get a "tool not found" error or no response.
 
-You haven't installed the package. Inside the repo root with your virtualenv active:
+**Cause:** The MCP server is not connected to your client.
 
-```bash
-pip install -e .
-```
-
-### `command not found: dag-planner-mcp`
-
-The script is not on your `PATH`. Either activate the virtual environment first:
-
-```bash
-source .venv/bin/activate
-dag-planner-mcp
-```
-
-Or use the full path:
-
-```bash
-/path/to/.venv/bin/dag-planner-mcp
-```
-
-Run `which dag-planner-mcp` (after activating) to find the exact path.
+**Fix:** Ask the user to follow the server setup guide: [`setup.md`](setup.md).
+- For Claude Desktop: check `claude_desktop_config.json` and restart Claude.
+- For Cursor/HTTP: confirm the server is running at `http://localhost:8000/mcp`.
 
 ---
 
-## Database Issues
+## `get_ready_tasks` Returns Empty, But the Workflow Is Not Complete
 
-### `DATABASE_URL not set` / server uses wrong database
+**Symptom:** You call `get_ready_tasks` and get an empty list, but `get_workflow_run` shows status is not `completed`.
 
-Export the variable before starting the server:
+**Cause:** One or more tasks are blocked.
 
-```bash
-export DATABASE_URL="sqlite:///dag_planner.db"
-dag-planner-mcp
-```
+**Fix:** Call `get_blocked_tasks` with the `run_id`.
 
-### PostgreSQL connection refused
+Tool: `get_blocked_tasks`
+Input: `{ "run_id": "run_abc" }`
 
-1. Confirm PostgreSQL is running: `pg_isready`
-2. Confirm the database exists: `psql -c "\l"`
-3. Confirm the URL format: `postgresql://user:password@host:5432/dbname`
-4. Install the async driver: `pip install -e ".[postgres]"`
-
-### `OperationalError: no such table`
-
-Tables are auto-created on first start. If they're missing, the server may have started with a different `DATABASE_URL` than you expect. Check the value with `echo $DATABASE_URL`.
+Possible causes:
+- A task is `blocked_human` — surface the question to the user, then call `resume_task` after their response.
+- An upstream task is `failed` — call `mark_task_failed` with a retry flag, or use `replace_plan_branch` to substitute a new recovery path.
 
 ---
 
-## Task / DAG Errors
+## Cycle Detected When Calling `create_plan_graph`
 
-### `Cycle detected` when calling `create_plan_graph`
+**Symptom:** `create_plan_graph` returns an error about a circular dependency.
 
-Your `depends_on` lists contain a circular reference. Use `validate_dag_acyclic` first:
+**Fix:** Call `validate_dag_acyclic` with your task list before submitting.
 
-```python
-await session.call_tool("validate_dag_acyclic", {"tasks": your_task_list})
-```
+Tool: `validate_dag_acyclic`
+Input: `{ "tasks": [ ... your task list ... ] }`
 
-Fix any reported cycles before re-submitting the plan.
-
-### Task stuck in `claimed` state
-
-The lease expired (no heartbeat / executor crashed). Simply claim the task again:
-
-```python
-await session.call_tool("claim_task_for_execution",
-                        {"task_id": task_id, "executor_id": "new-executor"})
-```
-
-### `validate_task_output` fails
-
-The output stored for the task doesn't match the `output_contract` JSON Schema. Check:
-
-1. The schema defined in `create_plan_graph` for the task.
-2. The output stored via `put_task_output` — ensure all `required` fields are present.
-
-### `get_ready_tasks` returns empty but not all tasks are done
-
-Some tasks may be blocked:
-
-```python
-res = await session.call_tool("get_blocked_tasks", {"run_id": run_id})
-```
-
-Common causes:
-- A task is `blocked_human` — waiting for `resume_task`.
-- An upstream task is `failed` — resolve it with `mark_task_failed` (retry) or `replace_plan_branch`.
+Fix any cycles the tool reports (task A depends on B, B depends on A), then re-submit.
 
 ---
 
-## MCP Client Issues
+## Task Stuck in `claimed` State
 
-### Claude Desktop: tools not appearing
+**Symptom:** A task was claimed but never progressed. It does not appear in `get_ready_tasks` even after a long wait.
 
-1. Verify the config path: macOS `~/Library/Application Support/Claude/claude_desktop_config.json`.
-2. Confirm the `command` path is absolute and the binary is executable.
-3. Restart Claude Desktop completely after config changes.
-4. Check the MCP server log in `~/Library/Logs/Claude/` (macOS).
+**Cause:** The executor that claimed the task failed or timed out. The lease has expired.
 
-### HTTP transport: `Connection refused` at `http://localhost:8000/mcp`
+**Fix:** Call `claim_task_for_execution` again for the same `task_id`. The server will re-issue the lease.
 
-Ensure you started the server in HTTP mode:
-
-```bash
-dag-planner-mcp --transport streamable-http --host 0.0.0.0 --port 8000
-```
-
-And that port 8000 is not occupied by another process: `lsof -i :8000`.
+Tool: `claim_task_for_execution`
+Input: `{ "task_id": "t_xyz", "executor_id": "me" }`
 
 ---
 
-## Running Tests
+## `validate_task_output` Fails
 
-```bash
-pip install -e ".[dev]"
-pytest tests/ -v
+**Symptom:** After calling `put_task_output`, `validate_task_output` returns a schema violation.
+
+**Cause:** The output you stored does not satisfy the `output_contract` JSON Schema defined for this task (missing required fields, wrong types, etc.).
+
+**Fix:**
+1. Call `get_task` to read the `output_contract` for the task.
+2. Check your output against the schema — add missing required fields.
+3. Call `put_task_output` again with the corrected output.
+4. Re-call `validate_task_output`.
+
+---
+
+## A Task Failed — How to Recover
+
+**Option A — Retry the same task:**
+
+Tool: `mark_task_failed`
+Input: `{ "task_id": "t_xyz", "error": "Timeout fetching data", "retry": true }`
+
+The task re-enters the `ready` state on the next `get_ready_tasks` call.
+
+**Option B — Replace the branch with a different plan:**
+
+Tool: `replace_plan_branch`
+Input:
+```json
+{
+  "run_id": "run_abc",
+  "cancel_from_task_key": "failed_task_key",
+  "new_tasks": [ { ... replacement task(s) ... } ]
+}
 ```
 
-All tests use an in-memory SQLite database and require no external services. If tests fail after a fresh install, try:
+All descendants of the failed task are cancelled and the new branch is grafted in.
 
-```bash
-pip install -e ".[dev]" --upgrade
-pytest tests/ -v --tb=short
-```
+---
+
+## How to Check Overall Run Progress
+
+Tool: `get_workflow_run`
+Input: `{ "run_id": "run_abc" }`
+
+Returns overall status (`pending`, `in_progress`, `completed`, `failed`) and task counts.
+
+Tool: `list_tasks`
+Input: `{ "run_id": "run_abc" }`
+
+Returns every task with its current status — useful for spotting which tasks are stuck.
+
+---
+
+## Server-Side Issues (ask the user to check)
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Tools respond with DB errors | `DATABASE_URL` wrong or DB not reachable | Check `echo $DATABASE_URL`; confirm DB is running |
+| Server crashes on start | Missing `aiosqlite` or `asyncpg` | Re-run `pip install -e .` (add `[postgres]` for PostgreSQL) |
+| Tables missing on first call | Server started before DB was created (PostgreSQL) | Create the DB first: `CREATE DATABASE dag_planner;` |
