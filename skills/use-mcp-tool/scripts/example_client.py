@@ -53,8 +53,6 @@ async def do_work(task_key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def run_orchestrator(session):
-    from mcp import ClientSession  # noqa: F401 — already imported via session arg
-
     await session.initialize()
     print("[orchestrator] connected to MCP server\n")
 
