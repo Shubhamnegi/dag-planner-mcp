@@ -6,6 +6,7 @@ A durable **DAG-based task planner** exposed as an [MCP (Model Context Protocol)
 
 ## Table of Contents
 
+- [Install this skill](#install-this-skill)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Database Configuration](#database-configuration)
@@ -18,6 +19,38 @@ A durable **DAG-based task planner** exposed as an [MCP (Model Context Protocol)
 - [Available MCP Tools](#available-mcp-tools)
 - [Orchestrator Loop Example](#orchestrator-loop-example)
 - [Running Tests](#running-tests)
+
+---
+
+## Install this skill
+
+AI agents (Claude, Copilot, etc.) can pick up ready-made instructions for using this MCP server by installing the bundled skill:
+
+```bash
+npx skills add Shubhamnegi/dag-planner-mcp --skill use-mcp-tool
+```
+
+Or install directly from the skill path:
+
+```bash
+npx skills add https://github.com/Shubhamnegi/dag-planner-mcp/tree/main/skills/use-mcp-tool
+```
+
+### What the skill provides
+
+| File | Purpose |
+|---|---|
+| [`skills/use-mcp-tool/SKILL.md`](skills/use-mcp-tool/SKILL.md) | Core instructions — when/how to use the tool |
+| [`skills/use-mcp-tool/references/setup.md`](skills/use-mcp-tool/references/setup.md) | Full installation and client integration guide |
+| [`skills/use-mcp-tool/references/examples.md`](skills/use-mcp-tool/references/examples.md) | Runnable code examples (parallel tasks, HITL gates, checkpoints) |
+| [`skills/use-mcp-tool/references/troubleshooting.md`](skills/use-mcp-tool/references/troubleshooting.md) | Common failure cases and fixes |
+| [`skills/use-mcp-tool/scripts/smoke_test.py`](skills/use-mcp-tool/scripts/smoke_test.py) | Quick sanity check — run after install |
+| [`skills/use-mcp-tool/scripts/example_client.py`](skills/use-mcp-tool/scripts/example_client.py) | Complete orchestrator example (stdio + HTTP) |
+
+### Requirements
+
+* Python ≥ 3.11
+* `DATABASE_URL` environment variable (defaults to `sqlite:///dag_planner.db`)
 
 ---
 
