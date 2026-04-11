@@ -15,6 +15,7 @@ A durable **DAG-based task planner** exposed as an [MCP (Model Context Protocol)
 - [Running the server](#running-the-server)
 - [Using with Claude Desktop (stdio)](#using-with-claude-desktop-stdio)
 - [Using with other MCP clients (streamable HTTP)](#using-with-other-mcp-clients-streamable-http)
+- [Streamlit Dashboard](#streamlit-dashboard)
 - [Available MCP Tools](#available-mcp-tools)
 - [Orchestrator Loop Example](#orchestrator-loop-example)
 - [Running Tests](#running-tests)
@@ -37,6 +38,14 @@ Optional (PostgreSQL):
 | Dependency | Version |
 |---|---|
 | asyncpg | ≥ 0.29 |
+
+Optional (Dashboard):
+
+| Dependency | Version |
+|---|---|
+| streamlit | ≥ 1.35 |
+| graphviz | ≥ 0.20 |
+| pandas | ≥ 2.0 |
 
 ---
 
@@ -75,6 +84,12 @@ pip install -e ".[postgres]"
 
 ```bash
 pip install -e ".[dev]"
+```
+
+**With Streamlit dashboard:**
+
+```bash
+pip install -e ".[dashboard]"
 ```
 
 ---
@@ -222,6 +237,45 @@ async with streamablehttp_client("http://localhost:8000/mcp") as (r, w, _):
         await session.initialize()
         result = await session.call_tool("create_workflow_run", {"goal": "Analyze AWS costs"})
 ```
+
+---
+
+## Streamlit Dashboard
+
+A read-only Streamlit dashboard ships in the `dashboard/` directory. It reads
+directly from the same database as the MCP server (via `DATABASE_URL`) and
+never writes any data.
+
+### Pages
+
+| Page | Description |
+|---|---|
+| **Overview** | Summary metric cards, task status bar chart, recent runs |
+| **Workflows** | Paginated & searchable list of all workflow runs |
+| **Run Detail** | Per-run deep-dive: task table, interactive DAG graph, event log, human approvals |
+| **Task Detail** | Full task state including all JSON payloads |
+
+### Quick start
+
+```bash
+# Install with dashboard extras
+pip install -e ".[dashboard]"
+
+# Point at the same database your MCP server uses
+export DATABASE_URL="sqlite:///dag_planner.db"
+# — or for PostgreSQL —
+export DATABASE_URL="postgresql://user:password@localhost:5432/dag_planner"
+
+# Launch
+streamlit run dashboard/app.py
+```
+
+The dashboard opens at **http://localhost:8501** by default.
+
+> **DAG visualization** requires the `graphviz` system package in addition to
+> the Python bindings. Install it with `brew install graphviz` (macOS) or
+> `apt-get install graphviz` (Debian/Ubuntu). If the system package is absent
+> the page falls back to a plain adjacency table.
 
 ---
 

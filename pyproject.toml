@@ -17,6 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.29"]
+dashboard = [
+    "streamlit>=1.35",
+    "graphviz>=0.20",
+    "pandas>=2.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
