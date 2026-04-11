@@ -5,31 +5,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
 from db_utils import get_task
+from ui_utils import status_badge as _badge
 
 st.set_page_config(page_title="Task Detail — DAG Planner", page_icon="🔬", layout="wide")
-
-# ── Status badge helper ───────────────────────────────────────────────────────
-
-_STATUS_COLORS = {
-    "completed": "#28a745",
-    "running": "#007bff",
-    "ready": "#17a2b8",
-    "failed": "#dc3545",
-    "cancelled": "#6c757d",
-    "draft": "#ffc107",
-    "blocked_human": "#fd7e14",
-    "blocked_dependency": "#fd7e14",
-    "created": "#adb5bd",
-    "validating": "#6f42c1",
-}
-
-
-def _badge(status: str) -> str:
-    color = _STATUS_COLORS.get(status, "#6c757d")
-    return (
-        f'<span style="background:{color};color:#fff;padding:2px 8px;'
-        f'border-radius:4px;font-size:0.8em">{status}</span>'
-    )
 
 
 # ── Task ID input ─────────────────────────────────────────────────────────────

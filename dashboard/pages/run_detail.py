@@ -7,31 +7,9 @@ import json
 import streamlit as st
 import pandas as pd
 from db_utils import get_workflow_run, list_events, list_approvals
+from ui_utils import STATUS_COLORS, status_badge as _badge, node_font_color
 
 st.set_page_config(page_title="Run Detail — DAG Planner", page_icon="🔍", layout="wide")
-
-# ── Status badge helpers ──────────────────────────────────────────────────────
-
-_STATUS_COLORS = {
-    "completed": "#28a745",
-    "running": "#007bff",
-    "ready": "#17a2b8",
-    "failed": "#dc3545",
-    "cancelled": "#6c757d",
-    "draft": "#ffc107",
-    "blocked_human": "#fd7e14",
-    "blocked_dependency": "#fd7e14",
-    "created": "#adb5bd",
-    "validating": "#6f42c1",
-}
-
-
-def _badge(status: str) -> str:
-    color = _STATUS_COLORS.get(status, "#6c757d")
-    return (
-        f'<span style="background:{color};color:#fff;padding:2px 8px;'
-        f'border-radius:4px;font-size:0.8em">{status}</span>'
-    )
 
 
 # ── Run ID input ──────────────────────────────────────────────────────────────
@@ -146,18 +124,7 @@ st.subheader("DAG Visualization")
 edges = run["edges"]
 task_map = {t["task_id"]: t for t in tasks}
 
-_NODE_COLORS = {
-    "completed": "#28a745",
-    "running": "#007bff",
-    "ready": "#17a2b8",
-    "failed": "#dc3545",
-    "cancelled": "#6c757d",
-    "draft": "#ffc107",
-    "blocked_human": "#fd7e14",
-    "blocked_dependency": "#fd7e14",
-    "created": "#adb5bd",
-    "validating": "#6f42c1",
-}
+_NODE_COLORS = STATUS_COLORS
 
 if tasks:
     try:
@@ -171,7 +138,7 @@ if tasks:
         for t in tasks:
             color = _NODE_COLORS.get(t["status"], "#adb5bd")
             label = f"{t['task_key']}\n({t['status']})"
-            dot.node(t["task_id"], label=label, fillcolor=color, fontcolor="#fff" if t["status"] not in ("draft", "created", "cancelled") else "#333")
+            dot.node(t["task_id"], label=label, fillcolor=color, fontcolor=node_font_color(t["status"]))
 
         for e in edges:
             dot.edge(e["parent_task_id"], e["child_task_id"])
