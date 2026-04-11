@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "dag-planner-mcp"
 version = "0.1.0"
 description = "A durable DAG-based planner MCP utility for agent orchestration"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]>=1.6.0",
@@ -31,6 +33,11 @@ dev = [
 
 [project.scripts]
 dag-planner-mcp = "dag_planner_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Shubhamnegi/dag-planner-mcp"
+Repository = "https://github.com/Shubhamnegi/dag-planner-mcp"
+Issues = "https://github.com/Shubhamnegi/dag-planner-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dag_planner_mcp"]

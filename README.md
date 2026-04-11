@@ -6,6 +6,7 @@ A durable **DAG-based task planner** exposed as an [MCP (Model Context Protocol)
 
 ## Table of Contents
 
+- [Quick start with uvx](#quick-start-with-uvx)
 - [Install this skill](#install-this-skill)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -20,6 +21,48 @@ A durable **DAG-based task planner** exposed as an [MCP (Model Context Protocol)
 - [Available MCP Tools](#available-mcp-tools)
 - [Orchestrator Loop Example](#orchestrator-loop-example)
 - [Running Tests](#running-tests)
+
+---
+
+## Quick start with uvx
+
+The fastest way to run the server is with [`uvx`](https://docs.astral.sh/uv/guides/tools/) — no virtual environment or `pip install` needed:
+
+```bash
+uvx dag-planner-mcp
+```
+
+Pass arguments (e.g. HTTP transport) the same way:
+
+```bash
+uvx dag-planner-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+With an environment variable:
+
+```bash
+DATABASE_URL="sqlite:///dag_planner.db" uvx dag-planner-mcp
+```
+
+### Claude Desktop — one-line config (uvx)
+
+Open `claude_desktop_config.json` and add:
+
+```json
+{
+  "mcpServers": {
+    "dag-planner-mcp": {
+      "command": "uvx",
+      "args": ["dag-planner-mcp"],
+      "env": {
+        "DATABASE_URL": "sqlite:////home/user/data/dag_planner.db"
+      }
+    }
+  }
+}
+```
+
+No installation step is required — `uvx` fetches and caches the package automatically on first run.
 
 ---
 
@@ -205,6 +248,10 @@ http://localhost:8000/mcp
 ---
 
 ## Using with Claude Desktop (stdio)
+
+The recommended approach is to use `uvx` so no manual installation is needed (see [Quick start with uvx](#quick-start-with-uvx) above).
+
+If you prefer to point at a locally installed binary:
 
 1. Open the Claude Desktop configuration file:
 
