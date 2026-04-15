@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dag-planner-mcp"
-version = "1.0.0"
+version = "1.0.1"
 description = "A durable DAG-based planner MCP utility for agent orchestration"
 readme = "README.md"
 license = { text = "MIT" }

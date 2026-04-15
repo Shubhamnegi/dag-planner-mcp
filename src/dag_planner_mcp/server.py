@@ -1,6 +1,32 @@
 """MCP server exposing all DAG Planner tools."""
 
+import logging
+import os
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
+
+
+def _configure_file_logging() -> None:
+    """Attach a FileHandler when LOG_FILE env var is set. No-op otherwise."""
+    log_path = os.environ.get("LOG_FILE", "").strip()
+    if not log_path:
+        return
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(
+        logging.getLogger().level or logging.INFO
+    )
+
+
+_configure_file_logging()
+
+logger = logging.getLogger("dag_planner_mcp")
 
 from dag_planner_mcp.tools.planning import (
     create_workflow_run as _create_workflow_run,
@@ -42,6 +68,38 @@ from dag_planner_mcp.tools.subagent import (
 )
 
 mcp = FastMCP("dag-planner-mcp")
+
+def _log_db_status() -> None:
+    """Log database URL and connectivity state at startup."""
+    from sqlalchemy import text, inspect as sa_inspect
+    from dag_planner_mcp.db import get_engine, _normalize_db_url
+    import urllib.parse
+
+    raw_url = _normalize_db_url(os.environ.get("DATABASE_URL", "sqlite:///dag_planner.db"))
+    # Mask password in URL before logging
+    try:
+        parsed = urllib.parse.urlparse(raw_url)
+        if parsed.password:
+            raw_url = raw_url.replace(parsed.password, "***")
+    except Exception:
+        pass
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        tables = sa_inspect(engine).get_table_names()
+        logger.info("DB connected  : %s", raw_url)
+        logger.info("DB tables     : %s", ", ".join(tables) if tables else "(none)")
+    except Exception as exc:
+        logger.error("DB connection FAILED : %s — %s", raw_url, exc)
+
+
+logger.info("=" * 60)
+logger.info("DAG Planner MCP server initialising")
+logger.info("Log file  : %s", os.environ.get("LOG_FILE", "(none — file logging disabled)"))
+_log_db_status()
+logger.info("=" * 60)
 
 
 # ── Planning ──────────────────────────────────────────────────────────────────
@@ -209,7 +267,9 @@ def request_human_input(task_id: str, question: str, options: list = None, reque
 
 
 def main():
+    logger.info("DAG Planner MCP server starting (transport=stdio)")
     mcp.run()
+    logger.info("DAG Planner MCP server stopped")
 
 
 if __name__ == "__main__":

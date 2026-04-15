@@ -99,10 +99,21 @@ class HumanApproval(Base):
 _engine = None
 
 
+def _normalize_db_url(url: str) -> str:
+    """Fix sqlite:///abs-path → sqlite:////abs-path (3-slash relative vs 4-slash absolute)."""
+    if url.startswith("sqlite:///") and not url.startswith("sqlite:////"):
+        path_part = url[len("sqlite:///"):]
+        if path_part.startswith("/"):
+            return "sqlite:////" + path_part
+    return url
+
+
 def get_engine():
     global _engine
     if _engine is None:
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///dag_planner.db")
+        db_url = _normalize_db_url(
+            os.environ.get("DATABASE_URL", "sqlite:///dag_planner.db")
+        )
         _engine = create_engine(db_url, echo=False)
         Base.metadata.create_all(_engine)
     return _engine
